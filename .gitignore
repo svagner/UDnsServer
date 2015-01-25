@@ -22,3 +22,9 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+# test zone's directory
+zones/*
+
+# Binary
+UDnsServer
