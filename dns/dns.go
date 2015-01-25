@@ -70,6 +70,7 @@ func (self *DNSZone) ParseDNSZone(zoneFile string) {
 		return
 	}
 	self.Data = make(DNSData)
+	cnt := 0
 	for b := range dns.ParseZone(f, "", zoneFile) {
 		if b.Error != nil {
 			log.Println("Error")
@@ -86,7 +87,13 @@ func (self *DNSZone) ParseDNSZone(zoneFile string) {
 			self.Data[b.RR.Header().Rrtype][b.RR.Header().Name] = make([]dns.RR, 0)
 		}
 		self.Data[b.RR.Header().Rrtype][b.RR.Header().Name] = append(self.Data[b.RR.Header().Rrtype][b.RR.Header().Name], b.RR)
+		cnt++
 	}
+	log.Println(zoneFile, "was loaded:",
+		len(self.Data[dns.TypeA]), "A records",
+		len(self.Data[dns.TypeSOA]), "SOA records",
+		len(self.Data[dns.TypeNS]), "NS records",
+		len(self.Data[dns.TypePTR]), "PTR records")
 }
 
 func (self ForwardServers) Lookup(w dns.ResponseWriter, req *dns.Msg) {
@@ -131,7 +138,6 @@ func (self DNSServer) Start(zoneConfigs []string) {
 		}
 		zone.ParseDNSZone(zoneName)
 
-		log.Println(zone.Origin)
 		udpHandler.HandleFunc(zone.Origin, func(w dns.ResponseWriter, req *dns.Msg) { zone.Handler(w, req) })
 		tcpHandler.HandleFunc(zone.Origin, func(w dns.ResponseWriter, req *dns.Msg) { zone.TransferHandler(w, req) })
 	}

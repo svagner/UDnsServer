@@ -27,7 +27,7 @@ func main() {
 	}
 	dnsInst := &dns.DNSServer{Addr: Configuration.Dns.Host, Port: Configuration.Dns.Port}
 	fds := strings.Split(Configuration.Dns.ForwardDns, ",")
-	if len(fds) > 0 {
+	if len(fds) > 1 {
 		for _, dnshost := range fds {
 			fdsData := strings.Split(dnshost, ":")
 			port, err := strconv.Atoi(fdsData[1])
@@ -43,6 +43,7 @@ func main() {
 		log.Fatalln(err.Error())
 	}
 
+	log.Println("Load data from configs:", zonesFiles)
 	dnsInst.Start(zonesFiles)
 
 	for {
