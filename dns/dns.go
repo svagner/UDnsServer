@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"errors"
 	"github.com/tonnerre/golang-dns"
+	//"golang.org/x/exp/fsnotify"
+	"github.com/go-fsnotify/fsnotify"
 	"log"
 	"net"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +24,7 @@ type DNSZone struct {
 	Origin string
 	Config string
 	Data   DNSData
+	Serial uint64
 }
 
 type ForwardResolver struct {
@@ -55,11 +59,54 @@ func (self *DNSZone) GetOrigin(zonefile string) error {
 			org := strings.Split(readln.Text(), " ")
 			if len(org) > 1 {
 				self.Origin = org[1]
+				self.Config = zonefile
 				return nil
 			}
 		}
 	}
 	return errors.New("Origin record wasn't found")
+}
+
+func (self *DNSZone) ReloadDNSZone(zoneFile string) {
+	f, err := os.Open(zoneFile)
+	defer f.Close()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	newData := make(DNSData)
+	var newSerial uint64
+	for b := range dns.ParseZone(f, "", zoneFile) {
+		if b.Error != nil {
+			log.Println("Error")
+			continue
+		}
+		if _, ok := newData[b.RR.Header().Rrtype]; !ok {
+			newData[b.RR.Header().Rrtype] = make(DNSRecord, 0)
+		}
+		if b.RR.Header().Name == "." {
+			(*b.RR.Header()).Name = self.Origin
+
+		}
+		if _, ok := newData[b.RR.Header().Rrtype][b.RR.Header().Name]; !ok {
+			newData[b.RR.Header().Rrtype][b.RR.Header().Name] = make([]dns.RR, 0)
+		}
+		newData[b.RR.Header().Rrtype][b.RR.Header().Name] = append(newData[b.RR.Header().Rrtype][b.RR.Header().Name], b.RR)
+		if b.RR.Header().Rrtype == dns.TypeSOA {
+			newSerial, err = strconv.ParseUint(strings.Fields(b.String())[6], 0, 64)
+			if err != nil {
+				log.Println(err.Error())
+			}
+		}
+	}
+	if self.Serial < newSerial {
+		self.Data = newData
+		log.Println(zoneFile, "was reloaded:",
+			len(self.Data[dns.TypeA]), "A records",
+			len(self.Data[dns.TypeSOA]), "SOA records",
+			len(self.Data[dns.TypeNS]), "NS records",
+			len(self.Data[dns.TypePTR]), "PTR records")
+	}
 }
 
 func (self *DNSZone) ParseDNSZone(zoneFile string) {
@@ -70,7 +117,6 @@ func (self *DNSZone) ParseDNSZone(zoneFile string) {
 		return
 	}
 	self.Data = make(DNSData)
-	cnt := 0
 	for b := range dns.ParseZone(f, "", zoneFile) {
 		if b.Error != nil {
 			log.Println("Error")
@@ -87,7 +133,12 @@ func (self *DNSZone) ParseDNSZone(zoneFile string) {
 			self.Data[b.RR.Header().Rrtype][b.RR.Header().Name] = make([]dns.RR, 0)
 		}
 		self.Data[b.RR.Header().Rrtype][b.RR.Header().Name] = append(self.Data[b.RR.Header().Rrtype][b.RR.Header().Name], b.RR)
-		cnt++
+		if b.RR.Header().Rrtype == dns.TypeSOA {
+			self.Serial, err = strconv.ParseUint(strings.Fields(b.String())[6], 0, 64)
+			if err != nil {
+				log.Println(err.Error())
+			}
+		}
 	}
 	log.Println(zoneFile, "was loaded:",
 		len(self.Data[dns.TypeA]), "A records",
@@ -136,6 +187,7 @@ func (self DNSServer) Start(zoneConfigs []string) {
 			log.Println(err)
 			continue
 		}
+		go zone.ConfigMonitor()
 		zone.ParseDNSZone(zoneName)
 
 		udpHandler.HandleFunc(zone.Origin, func(w dns.ResponseWriter, req *dns.Msg) { zone.Handler(w, req) })
@@ -166,6 +218,38 @@ func (self DNSServer) Start(zoneConfigs []string) {
 			panic(err)
 		}
 	}()
+}
+
+func (self *DNSZone) ConfigMonitor() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	defer watcher.Close()
+	done := make(chan bool)
+
+	go func() {
+		for {
+			select {
+			case event := <-watcher.Events:
+				if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
+					if event.Name == self.Config {
+						self.ReloadDNSZone(self.Config)
+						log.Println("Zone was reloaded from file", self.Config, "[", event, "]")
+					}
+				}
+			case err := <-watcher.Errors:
+				log.Println("error:", err)
+				done <- true
+			}
+		}
+	}()
+
+	err = watcher.Add(path.Dir(self.Config))
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-done
 }
 
 func (self DNSZone) TransferHandler(w dns.ResponseWriter, req *dns.Msg) {
