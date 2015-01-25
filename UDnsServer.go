@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"github.com/svagner/UDnsServer/config"
-	"github.com/svagner/UDnsServer/dns"
+	"github.com/svagner/UDnsServer/udns"
 	"log"
 	"os"
 	"os/signal"
@@ -25,7 +25,7 @@ func main() {
 	if err := Configuration.ParseConfig(*cfgFile); err != nil {
 		log.Fatalln(err.Error())
 	}
-	dnsInst := &dns.DNSServer{Addr: Configuration.Dns.Host, Port: Configuration.Dns.Port}
+	dnsInst := &udns.DNSServer{Addr: Configuration.Dns.Host, Port: Configuration.Dns.Port}
 	fds := strings.Split(Configuration.Dns.ForwardDns, ",")
 	if len(fds) > 1 {
 		for _, dnshost := range fds {

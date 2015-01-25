@@ -1,11 +1,10 @@
-package dns
+package udns
 
 import (
 	"bufio"
 	"errors"
-	"github.com/tonnerre/golang-dns"
-	//"golang.org/x/exp/fsnotify"
 	"github.com/go-fsnotify/fsnotify"
+	"github.com/tonnerre/golang-dns"
 	"log"
 	"net"
 	"os"
@@ -22,6 +21,7 @@ type ForwardServers []ForwardResolver
 
 type DNSZone struct {
 	Origin string
+	TTL    string
 	Config string
 	Data   DNSData
 	Serial uint64
@@ -54,31 +54,38 @@ func (self *DNSZone) GetOrigin(zonefile string) error {
 		return err
 	}
 	readln := bufio.NewScanner(f)
+	var hasOrigin bool
 	for readln.Scan() {
 		if strings.Index(readln.Text(), "$ORIGIN") == 0 {
 			org := strings.Split(readln.Text(), " ")
 			if len(org) > 1 {
 				self.Origin = org[1]
 				self.Config = zonefile
-				return nil
+				hasOrigin = true
 			}
 		}
+		if strings.Index(readln.Text(), "$TTL") == 0 {
+			self.TTL = strings.Fields(readln.Text())[1]
+		}
+	}
+	if hasOrigin {
+		return nil
 	}
 	return errors.New("Origin record wasn't found")
 }
 
-func (self *DNSZone) ReloadDNSZone(zoneFile string) {
+func (self *DNSZone) ReloadDNSZone(zoneFile string) error {
 	f, err := os.Open(zoneFile)
 	defer f.Close()
 	if err != nil {
-		log.Println(err)
-		return
+		log.Println()
+		return err
 	}
 	newData := make(DNSData)
 	var newSerial uint64
 	for b := range dns.ParseZone(f, "", zoneFile) {
 		if b.Error != nil {
-			log.Println("Error")
+			log.Println("Error in zone's file parse: " + b.Error.Error())
 			continue
 		}
 		if _, ok := newData[b.RR.Header().Rrtype]; !ok {
@@ -95,18 +102,24 @@ func (self *DNSZone) ReloadDNSZone(zoneFile string) {
 		if b.RR.Header().Rrtype == dns.TypeSOA {
 			newSerial, err = strconv.ParseUint(strings.Fields(b.String())[6], 0, 64)
 			if err != nil {
-				log.Println(err.Error())
+				log.Println("Coudn't convert serial for zone's file " + zoneFile)
+				return err
 			}
 		}
 	}
 	if self.Serial < newSerial {
+		if err := self.GetOrigin(zoneFile); err != nil {
+			return errors.New("Couldn't get origin string from zone file " + zoneFile)
+		}
 		self.Data = newData
+
 		log.Println(zoneFile, "was reloaded:",
 			len(self.Data[dns.TypeA]), "A records",
 			len(self.Data[dns.TypeSOA]), "SOA records",
 			len(self.Data[dns.TypeNS]), "NS records",
 			len(self.Data[dns.TypePTR]), "PTR records")
 	}
+	return nil
 }
 
 func (self *DNSZone) ParseDNSZone(zoneFile string) {
@@ -234,8 +247,12 @@ func (self *DNSZone) ConfigMonitor() {
 			case event := <-watcher.Events:
 				if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
 					if event.Name == self.Config {
-						self.ReloadDNSZone(self.Config)
-						log.Println("Zone was reloaded from file", self.Config, "[", event, "]")
+						if err := self.ReloadDNSZone(self.Config); err != nil {
+							log.Println("Zone file reload failed: " + self.Config)
+						} else {
+							log.Println("Zone was reloaded from file", self.Config, "[", event, "]")
+						}
+
 					}
 				}
 			case err := <-watcher.Errors:
@@ -281,4 +298,17 @@ func (self DNSZone) TransferHandler(w dns.ResponseWriter, req *dns.Msg) {
 		log.Printf("Was not a zone transfer request.")
 	}
 
+}
+
+func (self DNSZone) AddRecord() {
+	self.WriteConfig()
+}
+func (self DNSZone) PurgeRecord() {
+	self.WriteConfig()
+}
+
+func (self DNSZones) GetZoneByName() {
+}
+
+func (self DNSZones) GetZoneByIp() {
 }
