@@ -2,10 +2,14 @@ package main
 
 import (
 	"flag"
-	"github.com/svagner/dnsServer/config"
+	"github.com/svagner/UDnsServer/config"
+	"github.com/svagner/UDnsServer/dns"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -21,6 +25,25 @@ func main() {
 	if err := Configuration.ParseConfig(*cfgFile); err != nil {
 		log.Fatalln(err.Error())
 	}
+	dnsInst := &dns.DNSServer{Addr: Configuration.Dns.Host, Port: Configuration.Dns.Port}
+	fds := strings.Split(Configuration.Dns.ForwardDns, ",")
+	if len(fds) > 0 {
+		for _, dnshost := range fds {
+			fdsData := strings.Split(dnshost, ":")
+			port, err := strconv.Atoi(fdsData[1])
+			if err != nil {
+				log.Println("Failed to add Forward DNS: " + err.Error())
+				continue
+			}
+			dnsInst.AddForwardServer(fdsData[0], fdsData[2], port)
+		}
+	}
+	zonesFiles, err := filepath.Glob(Configuration.Dns.ZonesFiles)
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+
+	dnsInst.Start(zonesFiles)
 
 	for {
 		select {

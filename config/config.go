@@ -7,6 +7,7 @@ type Config struct {
 		Host       string
 		Port       int
 		ZonesFiles string
+		ForwardDns string
 	}
 	Global struct {
 		LogFile string
